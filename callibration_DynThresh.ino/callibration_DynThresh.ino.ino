@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
 const int numSensors = 8;
-int sensorPins[numSensors] = {A0, A1, A2, A3, A4, A5, A6, A7};
+int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
 
 // Arrays to hold min/max values from calibration
 int minWhite[numSensors];
@@ -34,7 +34,7 @@ void calibrateSurface(const char* label, int minArr[], int maxArr[]) {
   unsigned long start = millis();
   while (millis() - start < 5000) { // 5 seconds sampling
     for (int i = 0; i < numSensors; i++) {
-      int val = analogRead(sensorPins[i]);
+      float val = analogRead(sensorPins[i]);
       if (val < minArr[i]) minArr[i] = val;
       if (val > maxArr[i]) maxArr[i] = val;
     }
@@ -66,13 +66,10 @@ void setup() {
   calibrateSurface("BLACK", minBlack, maxBlack);
   clearSerialBuffer();
 
-  Serial.println("Full surface, press any key to start...");
-  while (!Serial.available()) {}
-
   // Step 3: Compute thresholds = average of maxWhite and minBlack
   for (int i = 0; i < numSensors; i++) {
-    //threshold[i] = (maxWhite[i] + minBlack[i]) / 2;
-    threshold[i] = max(maxWhite[i], minBlack[i]);
+    threshold[i] = (maxWhite[i] + minBlack[i]) / 2;
+    //threshold[i] = max(maxWhite[i], minBlack[i]);
   }
 
   Serial.println("Final Thresholds:");
@@ -82,17 +79,22 @@ void setup() {
   }
   Serial.println();
   Serial.println("Calibration complete.");
+
+  Serial.println("Full surface, press any key to start...");
+  while (!Serial.available()) {}
+
 }
 
 void loop() {
   // Test loop: print binary sensor states
   for (int i = 0; i < numSensors; i++) {
     int val = analogRead(sensorPins[i]);
-    if (val >= threshold[i]) {
-      Serial.print("1 ");
+    if (val > threshold[i]) {
+      Serial.print("1");
     } else {
-      Serial.print("0 ");
+      Serial.print("0");
     }
+    Serial.print(" ");
   }
   Serial.println();
   delay(200);

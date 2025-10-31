@@ -1,0 +1,136 @@
+#include <Arduino.h>
+
+// Motor pins
+#define AIN1 4
+#define AIN2 3
+#define BIN1 6
+#define BIN2 7
+#define PWMA 9
+#define PWMB 10
+
+const int numSensors = 8;
+int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
+
+bool isBlackLine = 1;
+float threshold[numSensors] = {894, 860, 849, 847, 806, 798, 783, 659};
+int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
+
+// PID constants — tune these
+float Kp = 40.0;
+float Ki = 0.0;
+float Kd = 25.0;
+
+float integral = 0;
+float previousError = 0;
+
+void setMotor(int pin1, int pin2, int pwm, int speed){
+    speed = constrain(speed, -60, 60);
+    if (speed > 0) {
+        digitalWrite(pin1, HIGH);
+        digitalWrite(pin2, LOW);
+        analogWrite(pwm, speed);
+    } else if (speed < 0) {
+        digitalWrite(pin1, LOW);
+        digitalWrite(pin2, HIGH);
+        analogWrite(pwm, -speed);
+    } else {
+        digitalWrite(pin1, LOW);
+        digitalWrite(pin2, LOW);
+        analogWrite(pwm, 0);
+    }
+}
+
+void motor1run(int speed){ setMotor(AIN1, AIN2, PWMA, speed); }
+void motor2run(int speed){ setMotor(BIN1, BIN2, PWMB, speed); }
+
+void setup() {
+  Serial.begin(9600);
+  for (int i = 0; i < numSensors; i++) pinMode(sensorPins[i], INPUT);
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+  pinMode(PWMA, OUTPUT); pinMode(PWMB, OUTPUT);
+  delay(3000);
+}
+
+void loop() {
+  int sensor[numSensors];
+  float error = 0.0;
+  int activeCount = 0;
+
+  // Read all sensors
+  for (int i = 0; i < numSensors; i++) {
+    int val = analogRead(sensorPins[i]);
+    sensor[i] = (isBlackLine) ? (val >= threshold[i]) : (val < threshold[i]);
+    if (sensor[i]) activeCount++;
+    error += sensor[i] * weight[i];
+  }
+
+  if (activeCount == 0) {
+    motor1run(0);
+    motor2run(0);
+    return;
+  }
+
+  bool leftExtreme = (sensor[0] == 1 && sensor[1] == 0 && sensor[2] == 0);
+  bool rightExtreme = (sensor[7] == 1 && sensor[6] == 0 && sensor[5] == 0);
+
+  // --- Delayless Spin Logic ---
+  if (leftExtreme) {
+    Serial.println("Hard left turn (delayless)");
+    // Spin left until center sensors detect line again
+    while (true) {
+      motor1run(-100);
+      motor2run(100);
+
+      int midLeft = analogRead(sensorPins[3]);
+      int midRight = analogRead(sensorPins[4]);
+
+      if ((isBlackLine && midLeft >= threshold[3] && midRight >= threshold[4]) ||
+          (!isBlackLine && midLeft < threshold[3] && midRight < threshold[4])) {
+        // Line reacquired
+        break;
+      }
+    }
+    motor1run(0);
+    motor2run(0);
+    delay(20);
+    return;
+  }
+
+  if (rightExtreme) {
+    Serial.println("Hard right turn (delayless)");
+    // Spin right until center sensors detect line again
+    while (true) {
+      motor1run(100);
+      motor2run(-100);
+
+      int midLeft = analogRead(sensorPins[3]);
+      int midRight = analogRead(sensorPins[4]);
+
+      if ((isBlackLine && midLeft >= threshold[3] && midRight >= threshold[4]) ||
+          (!isBlackLine && midLeft < threshold[3] && midRight < threshold[4])) {
+        // Line reacquired
+        break;
+      }
+    }
+    motor1run(0);
+    motor2run(0);
+    delay(20);
+    return;
+  }
+
+  // --- Normal PID Control ---
+  integral += error;
+  integral = constrain(integral, -50, 50);
+  float derivative = error - previousError;
+  previousError = error;
+
+  float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+
+  int baseSpeed = 200;
+  int leftSpeed = constrain(baseSpeed + correction, 0, 255);
+  int rightSpeed = constrain(baseSpeed - correction, 0, 255);
+
+  motor1run(leftSpeed);
+  motor2run(rightSpeed);
+}

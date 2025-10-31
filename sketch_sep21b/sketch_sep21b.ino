@@ -77,7 +77,7 @@ void readAndMapSensors(){
         // Adjust for bent frame / misalignment
         if(i==0 || i==1) raw = raw * 0.96;  // left sensors slightly lower
         if(i==7) raw = raw * 1.05;          // right sensor slightly higher
-
+        Serial.println(raw);
         // Map readings to 0..1000
         sensorValue[i] = constrain(map(raw, minValues[i], maxValues[i], 0, 1000), 0, 1000);
 

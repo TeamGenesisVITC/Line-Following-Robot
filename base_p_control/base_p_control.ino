@@ -9,11 +9,11 @@
 #define PWMB 10
 
 const int numSensors = 8; 
-int sensorPins[numSensors] = {A0, A1, A2, A3, A4, A5, A6, A7}; 
+int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0}; 
 
 bool isBlackLine = 1; 
-float threshold[numSensors] = {26, 26, 26, 26, 25, 25, 25, 24}; 
-int weight[numSensors] = {-4, -3, -2, -1, 1, 2, 3, 4};
+float threshold[numSensors] = {947, 915, 906, 904, 882, 877, 869, 880}; 
+int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 void clearSerialBuffer() {
   while (Serial.available()) {
@@ -45,10 +45,10 @@ void setup() {
   pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
   pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
   pinMode(PWMA, OUTPUT); pinMode(PWMB, OUTPUT);
+  delay(5000);
 }
 
 void loop() { 
-  
   int sensor[numSensors];
   float error = 0.0;
 
@@ -65,15 +65,63 @@ void loop() {
   }
   Serial.println();
   
-  float correction = map(error, -24, 24, 0, 255);
+  float correction = map(error, -15, 15, -60, 60);
+  correction = abs(correction);
+  Serial.println(error);
 
   if (error<0){
-    motor2run(255-correction);
-    motor1run(255);
+    // if (error<-8){
+    //   motor1run(0);
+    //   Serial.print("Left motor: "); Serial.print(0);
+    //   motor2run(80);
+    //   Serial.print(" Right motor: "); Serial.print(80);
+    //   Serial.println();
+    // }
+    // else{
+    //   motor1run(60-correction);
+    //   Serial.print("Left motor: "); Serial.print(60-correction);
+    //   motor2run(60);
+    //   Serial.print(" Right motor: "); Serial.print(60);
+    //   Serial.println();
+    // }
+    if (error<=-6){
+      delay(200);
+    }
+    motor1run(60-correction);
+    Serial.print("Left motor: "); Serial.print(60-correction);
+    motor2run(60);
+    Serial.print(" Right motor: "); Serial.print(60);
     Serial.println();
+    if (error<=-6){
+      delay(800);
+    }
   }else{
-    motor1run(255-correction);
-    motor2run(255);
+    // if (error>8){
+    //   motor2run(0);
+    //   Serial.print("Left motor: "); Serial.print(80);
+    //   motor1run(80);
+    //   Serial.print(" Right motor: "); Serial.print(0);
+    //   Serial.println();
+    // }
+    // else{
+    //   motor2run(60-correction);
+    //   Serial.print("Left motor: "); Serial.print(60);
+    //   motor1run(60);
+    //   Serial.print(" Right motor: "); Serial.print(60-correction);
+    //   Serial.println();
+    // }
+    if (error>=6){
+      delay(200);
+    }
+    motor2run(60-correction);
+    Serial.print("Left motor: "); Serial.print(60);
+    motor1run(60);
+    Serial.print(" Right motor: "); Serial.print(60-correction);
+    Serial.println();
+    if (error>=6){
+      delay(800);
+    }
   }
+  delay(100);
 
 }

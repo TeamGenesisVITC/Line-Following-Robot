@@ -27,17 +27,8 @@ void loop() {
   Serial.print("Sensors: "); 
   for (int i = 0; i < 8; i++) { 
     int val = analogRead(sensorPins[i]); // read sensor 
-    if (i == 0 || i == 1) { 
-      val = val * 0.96; 
-    } 
-    if (i == 7) { 
-      val = val * 1.05; 
-    } 
-    if (val >= 27) { // close to max 27 
-      Serial.print("1 "); 
-    } else { 
-      Serial.print("0 "); 
-    } 
+    Serial.print(val);
+    Serial.print(" ");
   } 
   Serial.println(); 
   delay(200); 
