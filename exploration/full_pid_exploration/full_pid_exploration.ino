@@ -8,17 +8,11 @@
 #define PWMA 9
 #define PWMB 10
 
-typedef struct Edge{
-  int node1;
-  int node2;
-  int dist;
-}edge;
-
 const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
 
 bool isBlackLine = 1;
-float threshold[numSensors] = {913, 880, 864, 859, 837, 844, 842, 860};
+float threshold[numSensors] = {940, 902, 883, 874, 851, 863, 862, 866};
 int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 // PID constants — tune these
@@ -60,17 +54,22 @@ void setup() {
 
 int count = 0;
 int lastNode = 0;
+int currNode = 0;
 int dist = 0;
-edge path[100];
 int dir = 0;
 int x = 0;
 int y = 0;
 int nodes[150][2];
+int matrix[10][10];
+
+bool turning = false;
+unsigned long turnStartTime = 0;
 
 void loop() {
   int sensor[numSensors];
   float error = 0.0;
   int activeCount = 0;
+  bool found = false;
 
   // Read all sensors
   for (int i = 0; i < numSensors; i++) {
@@ -90,35 +89,52 @@ void loop() {
   bool rightExtreme = (sensor[7] == 1 && sensor[6] == 0 && sensor[5] == 0);
 
   // --- Delayless Spin Logic ---
-  if (leftExtre me) {
-
+  if (leftExtreme) {
+    
+    Serial.println("Left Turn");
+    currNode = count++;
     for(int i=0; i<=count; i++){
-      if(nodes[i][1]<=(x+20) && nodes[i][1]>=(x-20) && nodes[i][2]<=(y+20) && nodes[i][2]>=(y-20)){
-        CurrNode = i;
+      if(nodes[i][1]<=(x+30) && nodes[i][1]>=(x-30) && nodes[i][2]<=(y+30) && nodes[i][2]>=(y-30)){
+        currNode = i;
+        count--;
+        found = true;
         break;
       }
     }
 
-    if (currNode&&prevNode){
-      Serial.println(currNode);
+    if(!found){
+      nodes[currNode][0] = x;
+      nodes[currNode][1] = y;
     }
 
-    Serial.print("Node ");
-    Serial.print(count++);
-    Serial.println();
+    if(lastNode!=currNode){
+      Serial.print("(x, y) : ");
+      Serial.print(x);
+      Serial.print(" ");
+      Serial.print(y);
+      Serial.print(" ");
+      Serial.print(dir);
+      Serial.println();
 
-    edge line = {lastNode, count, dist};
-    path[lastNode] = line;
-    Serial.print(lastNode);
-    Serial.print(" ");
-    Serial.print(count);
-    Serial.print(" ");
-    Serial.print(dist);
-    Serial.println();
+      Serial.print("Node ");
+      Serial.print(currNode);
+      Serial.println();
 
-    lastNode = count;
-    dist = 0;
-    dir = (dir-1)%4;
+      matrix[lastNode][currNode] = dist;
+      Serial.print(lastNode);
+      Serial.print(" ");
+      Serial.print(currNode);
+      Serial.print(" ");
+      Serial.print(dist);
+      Serial.println();
+
+      lastNode = currNode;
+      dist = 0;
+      dir = (dir-1)%4;
+      if(dir==-1){
+        dir=3;
+      }
+    }
 
     //Serial.println("Hard left turn (delayless)");
     // Spin left until center sensors detect line again
@@ -142,22 +158,46 @@ void loop() {
   }
 
   else if (rightExtreme) {
-    Serial.print("Node ");
-    Serial.print(count++);
-    Serial.println();
+    Serial.println("Right turn");
+    currNode = count++;
+    for(int i=0; i<=count; i++){
+      if(nodes[i][1]<=(x+45) && nodes[i][1]>=(x-30) && nodes[i][2]<=(y+45) && nodes[i][2]>=(y-30)){
+        currNode = i;
+        count--;
+        found = true;
+        break;
+      }
+    }
 
-    edge line = {lastNode, count, dist};
-    path[lastNode] = line;
-    Serial.print(lastNode);
-    Serial.print(" ");
-    Serial.print(count);
-    Serial.print(" ");
-    Serial.print(dist);
-    Serial.println();
+    if(!found){
+      nodes[currNode][0] = x;
+      nodes[currNode][1] = y;
+    }
 
-    lastNode = count;
-    dist = 0;
-    dir = (dir+1)%4;
+    if(lastNode!=currNode){
+      Serial.print("(x, y, d) : ");
+      Serial.print(x);
+      Serial.print(" ");
+      Serial.print(y);
+      Serial.print(" ");
+      Serial.print(dir);
+      Serial.println();
+
+      Serial.print("Node ");
+      Serial.print(currNode);
+      Serial.println();
+
+      matrix[lastNode][currNode] = dist;
+      Serial.print(lastNode);
+      Serial.print(" ");
+      Serial.print(currNode);
+      Serial.print(" ");
+      Serial.print(dist);
+      Serial.println();
+      lastNode = currNode;
+      dist = 0;
+      dir = (dir+1)%4;
+    }
 
     //Serial.println("Hard right turn (delayless)");
     // Spin right until center sensors detect line again
