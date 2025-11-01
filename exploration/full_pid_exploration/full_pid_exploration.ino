@@ -11,8 +11,8 @@
 typedef struct Edge{
   int node1;
   int node2;
-  float dist;
-};
+  int dist;
+}edge;
 
 const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
@@ -58,6 +58,15 @@ void setup() {
   delay(3000);
 }
 
+int count = 0;
+int lastNode = 0;
+int dist = 0;
+edge path[100];
+int dir = 0;
+int x = 0;
+int y = 0;
+int nodes[150][2];
+
 void loop() {
   int sensor[numSensors];
   float error = 0.0;
@@ -81,8 +90,37 @@ void loop() {
   bool rightExtreme = (sensor[7] == 1 && sensor[6] == 0 && sensor[5] == 0);
 
   // --- Delayless Spin Logic ---
-  if (leftExtreme) {
-    Serial.println("Hard left turn (delayless)");
+  if (leftExtre me) {
+
+    for(int i=0; i<=count; i++){
+      if(nodes[i][1]<=(x+20) && nodes[i][1]>=(x-20) && nodes[i][2]<=(y+20) && nodes[i][2]>=(y-20)){
+        CurrNode = i;
+        break;
+      }
+    }
+
+    if (currNode&&prevNode){
+      Serial.println(currNode);
+    }
+
+    Serial.print("Node ");
+    Serial.print(count++);
+    Serial.println();
+
+    edge line = {lastNode, count, dist};
+    path[lastNode] = line;
+    Serial.print(lastNode);
+    Serial.print(" ");
+    Serial.print(count);
+    Serial.print(" ");
+    Serial.print(dist);
+    Serial.println();
+
+    lastNode = count;
+    dist = 0;
+    dir = (dir-1)%4;
+
+    //Serial.println("Hard left turn (delayless)");
     // Spin left until center sensors detect line again
     while (true) {
       motor1run(-100);
@@ -103,8 +141,25 @@ void loop() {
     return;
   }
 
-  if (rightExtreme) {
-    Serial.println("Hard right turn (delayless)");
+  else if (rightExtreme) {
+    Serial.print("Node ");
+    Serial.print(count++);
+    Serial.println();
+
+    edge line = {lastNode, count, dist};
+    path[lastNode] = line;
+    Serial.print(lastNode);
+    Serial.print(" ");
+    Serial.print(count);
+    Serial.print(" ");
+    Serial.print(dist);
+    Serial.println();
+
+    lastNode = count;
+    dist = 0;
+    dir = (dir+1)%4;
+
+    //Serial.println("Hard right turn (delayless)");
     // Spin right until center sensors detect line again
     while (true) {
       motor1run(100);
@@ -139,4 +194,14 @@ void loop() {
 
   motor1run(leftSpeed);
   motor2run(rightSpeed);
+  dist++;
+  if (dir==0){
+    y++;
+  }else if(dir==1){
+    x++;
+  }else if(dir==2){
+    y--;
+  }else{
+    x--;
+  }
 }
