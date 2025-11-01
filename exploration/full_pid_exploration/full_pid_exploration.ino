@@ -62,8 +62,7 @@ int y = 0;
 int nodes[150][2];
 int matrix[10][10];
 
-bool turning = false;
-unsigned long turnStartTime = 0;
+unsigned long prev = millis();
 
 void loop() {
   int sensor[numSensors];
@@ -90,11 +89,25 @@ void loop() {
 
   // --- Delayless Spin Logic ---
   if (leftExtreme) {
-    
+
+    unsigned long now = millis();
+    dist = now-prev;
+    prev = now;
+
+    if (dir==0){
+      y+=dist;
+    }else if(dir==1){
+      x+=dist;
+    }else if(dir==2){
+      y-=dist;
+    }else{
+      x-=dist;
+    }
+
     Serial.println("Left Turn");
     currNode = count++;
     for(int i=0; i<=count; i++){
-      if(nodes[i][1]<=(x+30) && nodes[i][1]>=(x-30) && nodes[i][2]<=(y+30) && nodes[i][2]>=(y-30)){
+      if(nodes[i][0]<=(x+30) && nodes[i][0]>=(x-30) && nodes[i][1]<=(y+30) && nodes[i][1]>=(y-30)){
         currNode = i;
         count--;
         found = true;
@@ -158,10 +171,25 @@ void loop() {
   }
 
   else if (rightExtreme) {
+
+    unsigned long now = millis();
+    dist = now-prev;
+    prev = now;
+
+    if (dir==0){
+      y+=dist;
+    }else if(dir==1){
+      x+=dist;
+    }else if(dir==2){
+      y-=dist;
+    }else{
+      x-=dist;
+    }
+
     Serial.println("Right turn");
     currNode = count++;
     for(int i=0; i<=count; i++){
-      if(nodes[i][1]<=(x+45) && nodes[i][1]>=(x-30) && nodes[i][2]<=(y+45) && nodes[i][2]>=(y-30)){
+      if(nodes[i][0]<=(x+45) && nodes[i][0]>=(x-30) && nodes[i][1]<=(y+45) && nodes[i][1]>=(y-30)){
         currNode = i;
         count--;
         found = true;
@@ -234,14 +262,4 @@ void loop() {
 
   motor1run(leftSpeed);
   motor2run(rightSpeed);
-  dist++;
-  if (dir==0){
-    y++;
-  }else if(dir==1){
-    x++;
-  }else if(dir==2){
-    y--;
-  }else{
-    x--;
-  }
 }
