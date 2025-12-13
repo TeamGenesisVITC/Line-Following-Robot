@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
 /* ================= USER EDIT ================= */
-#define ENCODER_PIN      /* PUT ENCODER PIN HERE */
+#define ENCODER_PIN 2        // MUST be 2 or 3
 #define CALIB_BUTTON 11
 #define START_BUTTON 12
 
@@ -39,14 +39,11 @@ void encoderISR() { encoderCount++; }
 
 // ---------------- GRAPH STRUCTURES ----------------
 struct Edge {
-  uint16_t dist;   // encoder pulses
-  uint8_t  mask;   // turn mask
+  uint16_t dist;
+  uint8_t  mask;
 };
 
-// graph[node][dir]
 Edge graph[MAX_NODES][4];
-
-// node coordinates
 uint16_t nodes[MAX_NODES][2];
 
 uint8_t nodeCount = 0;
@@ -91,6 +88,39 @@ void setMotor(int pin1, int pin2, int pwm, int speed){
 void motor1run(int speed){ setMotor(AIN1, AIN2, PWMA, speed); }
 void motor2run(int speed){ setMotor(BIN1, BIN2, PWMB, speed); }
 
+// ---------------- TURN MASK (ONLY ADDITION) ----------------
+uint8_t computeTurnMask(int sensor[]) {
+  uint8_t mask = 0;
+
+  // forward
+  if (sensor[3] || sensor[4]) {
+    if (dir == 0) mask |= BIT_E;
+    else if (dir == 1) mask |= BIT_S;
+    else if (dir == 2) mask |= BIT_W;
+    else mask |= BIT_N;
+  }
+
+  // left
+  if (sensor[0]) {
+    uint8_t d = (dir + 3) % 4;
+    if (d == 0) mask |= BIT_E;
+    else if (d == 1) mask |= BIT_S;
+    else if (d == 2) mask |= BIT_W;
+    else mask |= BIT_N;
+  }
+
+  // right
+  if (sensor[7]) {
+    uint8_t d = (dir + 1) % 4;
+    if (d == 0) mask |= BIT_E;
+    else if (d == 1) mask |= BIT_S;
+    else if (d == 2) mask |= BIT_W;
+    else mask |= BIT_N;
+  }
+
+  return mask;
+}
+
 // ---------------- CALIBRATION ----------------
 void runCalibration() {
   int minValues[NUM_SENSORS];
@@ -100,8 +130,6 @@ void runCalibration() {
     minValues[i] = 1023;
     maxValues[i] = 0;
   }
-
-  Serial.println("Calibrating...");
 
   motor1run(-CALIBRATION_SPEED);
   motor2run(CALIBRATION_SPEED);
@@ -118,13 +146,8 @@ void runCalibration() {
   motor1run(0);
   motor2run(0);
 
-  Serial.println("Thresholds:");
-  for (int i = 0; i < NUM_SENSORS; i++) {
+  for (int i = 0; i < NUM_SENSORS; i++)
     threshold[i] = (minValues[i] + maxValues[i]) / 2;
-    Serial.print(threshold[i]);
-    Serial.print(" ");
-  }
-  Serial.println();
 }
 
 // ---------------- SETUP ----------------
@@ -144,7 +167,6 @@ void setup() {
   pinMode(CALIB_BUTTON, INPUT_PULLUP);
   pinMode(START_BUTTON, INPUT_PULLUP);
 
-  // initialize first node
   nodes[0][0] = 0;
   nodes[0][1] = 0;
   nodeCount = 1;
@@ -153,27 +175,21 @@ void setup() {
     graph[0][d].dist = 0;
     graph[0][d].mask = 0;
   }
-
-  Serial.println("Press 11 to calibrate, 12 to start");
 }
 
 // ---------------- LOOP ----------------
 void loop() {
 
-  // -------- CALIBRATION BUTTON --------
   if (!calibrated && digitalRead(CALIB_BUTTON) == LOW) {
     delay(200);
     runCalibration();
     calibrated = true;
-    Serial.println("Calibration done");
   }
 
-  // -------- START BUTTON --------
   if (calibrated && !started && digitalRead(START_BUTTON) == LOW) {
     delay(200);
     encoderCount = 0;
     started = true;
-    Serial.println("Exploration started");
   }
 
   if (!started) {
@@ -182,7 +198,6 @@ void loop() {
     return;
   }
 
-  // ---------------- SENSOR READ ----------------
   int sensor[NUM_SENSORS];
   float error = 0;
   int activeCount = 0;
@@ -195,11 +210,7 @@ void loop() {
     error += sensor[i] * weight[i];
   }
 
-  if (activeCount == 0) {
-    motor1run(0);
-    motor2run(0);
-    return;
-  }
+  if (activeCount == 0) return;
 
   bool leftExtreme  = (sensor[0] && !sensor[1] && !sensor[2]);
   bool rightExtreme = (sensor[7] && !sensor[6] && !sensor[5]);
@@ -236,11 +247,13 @@ void loop() {
     }
 
     if(lastNode!=currNode){
+      uint8_t mask = computeTurnMask(sensor);
+
       graph[lastNode][dir].dist = dist;
-      graph[lastNode][dir].mask = BIT_E | BIT_S;
+      graph[lastNode][dir].mask = mask;
 
       graph[currNode][(dir+2)%4].dist = dist;
-      graph[currNode][(dir+2)%4].mask = BIT_E | BIT_S;
+      graph[currNode][(dir+2)%4].mask = mask;
 
       lastNode = currNode;
       dir = (dir + 3) % 4;
@@ -288,11 +301,13 @@ void loop() {
     }
 
     if(lastNode!=currNode){
+      uint8_t mask = computeTurnMask(sensor);
+
       graph[lastNode][dir].dist = dist;
-      graph[lastNode][dir].mask = BIT_E | BIT_S;
+      graph[lastNode][dir].mask = mask;
 
       graph[currNode][(dir+2)%4].dist = dist;
-      graph[currNode][(dir+2)%4].mask = BIT_E | BIT_S;
+      graph[currNode][(dir+2)%4].mask = mask;
 
       lastNode = currNode;
       dir = (dir + 1) % 4;
@@ -311,7 +326,6 @@ void loop() {
   // ---------------- PID CONTROL ----------------
   integral += error;
   integral = constrain(integral,-50,50);
-
   float derivative = error - previousError;
   previousError = error;
 
