@@ -12,7 +12,7 @@ const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
 
 bool isBlackLine = 0;
-float threshold[numSensors] = {936, 914, 903, 907, 894, 891, 883, 861};
+float threshold[numSensors] = {839, 834, 819, 824, 811, 812, 815, 825};
 int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 float Kp = 40.0;
@@ -63,7 +63,7 @@ void loop() {
   // Read all sensors
   for (int i = 0; i < numSensors; i++) {
     int val = analogRead(sensorPins[i]);
-    sensor[i] = (isBlackLine) ? (val >= threshold[i]) : (val < threshold[i]);
+    sensor[i] = (isBlackLine) ? (val > threshold[i]) : (val <= threshold[i]);
     if (sensor[i]) activeCount++;
     error += sensor[i] * weight[i];
   }
@@ -85,7 +85,7 @@ void loop() {
 
     for (int i = 0; i < numSensors; i++) {
       int val = analogRead(sensorPins[i]);
-      sensor[i] = isBlackLine ? (val >= threshold[i]) : (val < threshold[i]);
+      sensor[i] = isBlackLine ? (val > threshold[i]) : (val <= threshold[i]);
     }
 
     choice[1] = (sensor[2] + sensor[3] + sensor[4] + sensor[5] >= 2);
@@ -116,8 +116,8 @@ void loop() {
 
       bool onLine =
         isBlackLine ?
-        (midLeft >= threshold[3] || midRight >= threshold[4]) :
-        (midLeft < threshold[3] || midRight < threshold[4]);
+        (midLeft > threshold[3] || midRight > threshold[4]) :
+        (midLeft <= threshold[3] || midRight <= threshold[4]);
 
       if (onLine) break;
     }
@@ -139,8 +139,8 @@ void loop() {
 
       bool onLine =
         isBlackLine ?
-        (midLeft >= threshold[3] || midRight >= threshold[4]) :
-        (midLeft < threshold[3] || midRight < threshold[4]);
+        (midLeft > threshold[3] || midRight > threshold[4]) :
+        (midLeft <= threshold[3] || midRight <= threshold[4]);
 
       if (onLine) break;
     }

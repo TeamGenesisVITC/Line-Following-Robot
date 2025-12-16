@@ -1,7 +1,32 @@
 #include <Arduino.h>
 
+// Motor pins
+#define AIN1 4
+#define AIN2 3
+#define BIN1 6
+#define BIN2 7
+#define PWMA 9
+#define PWMB 10
+
 const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
+
+// Motor helper
+void setMotor(int pin1, int pin2, int pwm, int speed){
+    speed = constrain(speed, 0, 255); // only forward for now
+    if(speed > 0){
+        digitalWrite(pin1, HIGH);
+        digitalWrite(pin2, LOW);
+        analogWrite(pwm, speed);
+    } else {
+        digitalWrite(pin1, HIGH);
+        digitalWrite(pin2, HIGH);
+        analogWrite(pwm, 0);
+    }
+}
+
+void motor1run(int speed){ setMotor(AIN1, AIN2, PWMA, speed); }
+void motor2run(int speed){ setMotor(BIN1, BIN2, PWMB, speed); }
 
 // Arrays to hold min/max values from calibration
 int minWhite[numSensors];
@@ -60,6 +85,8 @@ void setup() {
   }
 
   // Step 1: White run
+  motor1run(80);
+  motor2run(80);
   calibrateSurface("WHITE", minWhite, maxWhite);
   clearSerialBuffer();
   // Step 2: Black run
@@ -84,6 +111,8 @@ void setup() {
 
   Serial.println("Full surface, press any key to start...");
   while (!Serial.available()) {}
+  motor1run(0);
+  motor2run(0);
 
 }
 
