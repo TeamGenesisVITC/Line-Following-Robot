@@ -57,7 +57,7 @@ void calibrateSurface(const char* label, int minArr[], int maxArr[]) {
   }
 
   unsigned long start = millis();
-  while (millis() - start < 5000) { // 5 seconds sampling
+  while (millis() - start < 10000) { // 5 seconds sampling
     for (int i = 0; i < numSensors; i++) {
       float val = analogRead(sensorPins[i]);
       if (val < minArr[i]) minArr[i] = val;
