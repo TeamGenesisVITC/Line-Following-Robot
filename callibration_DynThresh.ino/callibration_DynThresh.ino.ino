@@ -68,14 +68,16 @@ void setup() {
 
   // Step 3: Compute thresholds = average of maxWhite and minBlack
   for (int i = 0; i < numSensors; i++) {
-    threshold[i] = (maxWhite[i] + minBlack[i]) / 2;
+    threshold[i] = (((maxWhite[i] + minBlack[i]) / 2)+minBlack[i])/2;
     //threshold[i] = max(maxWhite[i], minBlack[i]);
   }
 
   Serial.println("Final Thresholds:");
   for (int i = 0; i < numSensors; i++) {
     Serial.print(threshold[i]);
-    Serial.print(" ");
+    if (i<numSensors-1){
+      Serial.print(", ");
+    }
   }
   Serial.println();
   Serial.println("Calibration complete.");
@@ -89,7 +91,7 @@ void loop() {
   // Test loop: print binary sensor states
   for (int i = 0; i < numSensors; i++) {
     int val = analogRead(sensorPins[i]);
-    if (val > threshold[i]) {
+    if (val <= threshold[i]) {
       Serial.print("1");
     } else {
       Serial.print("0");

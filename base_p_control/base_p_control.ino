@@ -12,7 +12,7 @@ const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0}; 
 
 bool isBlackLine = 1; 
-float threshold[numSensors] = {947, 915, 906, 904, 882, 877, 869, 880}; 
+float threshold[numSensors] = {864, 846, 839, 837, 824, 809, 794, 806}; 
 int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 void clearSerialBuffer() {
@@ -65,7 +65,7 @@ void loop() {
   }
   Serial.println();
   
-  float correction = map(error, -15, 15, -60, 60);
+  float correction = map(error, -15, 15, -80, 80);
   correction = abs(correction);
   Serial.println(error);
 
@@ -88,9 +88,9 @@ void loop() {
       delay(200);
     }
     motor1run(60-correction);
-    Serial.print("Left motor: "); Serial.print(60-correction);
+    Serial.print("Left motor: "); Serial.print(80-correction);
     motor2run(60);
-    Serial.print(" Right motor: "); Serial.print(60);
+    Serial.print(" Right motor: "); Serial.print(80);
     Serial.println();
     if (error<=-6){
       delay(800);
@@ -114,9 +114,9 @@ void loop() {
       delay(200);
     }
     motor2run(60-correction);
-    Serial.print("Left motor: "); Serial.print(60);
+    Serial.print("Left motor: "); Serial.print(80);
     motor1run(60);
-    Serial.print(" Right motor: "); Serial.print(60-correction);
+    Serial.print(" Right motor: "); Serial.print(80-correction);
     Serial.println();
     if (error>=6){
       delay(800);

@@ -13,8 +13,8 @@ const int CALIBRATE_BUTTON_PIN = 11;
 const int START_BUTTON_PIN = 12;
 
 // --- Speed Control Variables ---
-int BASE_SPEED = 100;         // Base speed for PID line following (0-255)
-int CALIBRATION_SPEED = 100;   // Spin speed for calibration (0-255)
+int BASE_SPEED = 50;         // Base speed for PID line following (0-255)
+int CALIBRATION_SPEED = 50;   // Spin speed for calibration (0-255)
 
 const int NUM_SENSORS = 8; // Changed from numSensors
 int sensorPins[NUM_SENSORS] = {A7, A6, A5, A4, A3, A2, A1, A0};

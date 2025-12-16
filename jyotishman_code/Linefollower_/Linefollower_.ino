@@ -15,7 +15,7 @@
 //------------------------------------------------------------
 
 //--------Enter Line Details here---------
-bool isBlackLine = 1;             //keep 1 in case of black line. In case of white line change this to 0
+bool isBlackLine = 0;             //keep 1 in case of black line. In case of white line change this to 0
 unsigned int numSensors = 8;      
 //-----------------------------------------
 
@@ -23,7 +23,7 @@ int P, D, I, previousError, PIDvalue;
 double error;
 int lsp, rsp;
 int lfSpeed = 100;
-int currentSpeed = 30;
+int currentSpeed = 100;
 int sensorWeight[8] = { 8, 4, 2, 1, -1, -2, -4, -8 };
 int activeSensors;
 float Kp = 0.03;
@@ -175,7 +175,7 @@ void readLine() {
 }
 //--------Function to run Motor 1-----------------
 void motor1run(int motorSpeed) {
-  motorSpeed = constrain(motorSpeed, -255, 255);
+  motorSpeed = constrain(motorSpeed, -100, 100);
   if (motorSpeed > 0) {
     digitalWrite(AIN1, 1);
     digitalWrite(AIN2, 0);
@@ -193,7 +193,7 @@ void motor1run(int motorSpeed) {
 
 //--------Function to run Motor 2-----------------
 void motor2run(int motorSpeed) {
-  motorSpeed = constrain(motorSpeed, -255, 255);
+  motorSpeed = constrain(motorSpeed, -100, 100);
   if (motorSpeed > 0) {
     digitalWrite(BIN1, 1);
     digitalWrite(BIN2, 0);

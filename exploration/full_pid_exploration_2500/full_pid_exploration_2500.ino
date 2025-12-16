@@ -11,8 +11,8 @@
 const int numSensors = 8;
 int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
 
-bool isBlackLine = 1;
-float threshold[numSensors] = {908, 890, 878, 877, 866, 863, 843, 806};
+bool isBlackLine = 0;
+float threshold[numSensors] = {919, 903, 898, 897, 879, 873, 875, 875};
 int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 // PID constants — tune these
@@ -22,6 +22,10 @@ float Kd = 25.0;
 
 float integral = 0;
 float previousError = 0;
+
+// TURNING STATE VARIABLES
+bool isTurning = false;
+int turnDirection = 0; // -1 = left, 1 = right, 0 = not turning
 
 void setMotor(int pin1, int pin2, int pwm, int speed){
     speed = constrain(speed, -130, 130);
@@ -78,16 +82,41 @@ void loop() {
     error += sensor[i] * weight[i];
   }
 
-  if (activeCount == 0) {
-    motor1run(0);
-    motor2run(0);
-    return;
-  }
+  // Check middle sensors for line presence
+  bool middleOnLine = (sensor[3] == 1 || sensor[4] == 1);
 
   bool leftExtreme = (sensor[0] == 1 && sensor[1] == 0 && sensor[2] == 0);
   bool rightExtreme = (sensor[7] == 1 && sensor[6] == 0 && sensor[5] == 0);
 
-  // --- Delayless Spin Logic ---
+  // --- IF CURRENTLY TURNING, KEEP TURNING UNTIL MIDDLE SENSORS DETECT LINE ---
+  if (isTurning) {
+    if (turnDirection == -1) {
+      // Turning left
+      motor1run(-130);
+      motor2run(130);
+    } else if (turnDirection == 1) {
+      // Turning right
+      motor1run(130);
+      motor2run(-130);
+    }
+
+    // Check if turn is complete (middle sensors back on line)
+    int midLeft = analogRead(sensorPins[3]);
+    int midRight = analogRead(sensorPins[4]);
+    
+    if ((isBlackLine && midLeft >= threshold[3] && midRight >= threshold[4]) ||
+        (!isBlackLine && midLeft < threshold[3] && midRight < threshold[4])) {
+      // Turn complete
+      isTurning = false;
+      turnDirection = 0;
+      motor1run(0);
+      motor2run(0);
+      delay(20);
+    }
+    return; // Skip rest of loop while turning
+  }
+
+  // --- DETECT START OF TURN ---
   if (leftExtreme) {
 
     unsigned long now = millis();
@@ -149,24 +178,9 @@ void loop() {
       }
     }
 
-    //Serial.println("Hard left turn (delayless)");
-    // Spin left until center sensors detect line again
-    while (true) {
-      motor1run(-130);
-      motor2run(130);
-
-      int midLeft = analogRead(sensorPins[3]);
-      int midRight = analogRead(sensorPins[4]);
-
-      if ((isBlackLine && midLeft >= threshold[3] && midRight >= threshold[4]) ||
-          (!isBlackLine && midLeft < threshold[3] && midRight < threshold[4])) {
-        // Line reacquired
-        break;
-      }
-    }
-    motor1run(0);
-    motor2run(0);
-    delay(20);
+    // Set turning state
+    isTurning = true;
+    turnDirection = -1; // Left turn
     return;
   }
 
@@ -227,24 +241,16 @@ void loop() {
       dir = (dir+1)%4;
     }
 
-    //Serial.println("Hard right turn (delayless)");
-    // Spin right until center sensors detect line again
-    while (true) {
-      motor1run(130);
-      motor2run(-130);
+    // Set turning state
+    isTurning = true;
+    turnDirection = 1; // Right turn
+    return;
+  }
 
-      int midLeft = analogRead(sensorPins[3]);
-      int midRight = analogRead(sensorPins[4]);
-
-      if ((isBlackLine && midLeft >= threshold[3] && midRight >= threshold[4]) ||
-          (!isBlackLine && midLeft < threshold[3] && midRight < threshold[4])) {
-        // Line reacquired
-        break;
-      }
-    }
+  // --- ONLY RUN IF ERROR IS NOT ZERO OR MIDDLE SENSORS ARE ON LINE ---
+  if (activeCount == 0 || (error == 0 && !middleOnLine)) {
     motor1run(0);
     motor2run(0);
-    delay(20);
     return;
   }
 
