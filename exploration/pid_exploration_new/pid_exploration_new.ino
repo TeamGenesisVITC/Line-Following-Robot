@@ -79,13 +79,13 @@ void loop()
   {
     int val = analogRead(sensorPins[i]);
     sensor[i] = (isBlackLine) ? (val > threshold[i]) : (val <= threshold[i]);
-    // Serial.print(val);
-    // Serial.print(" ");
+    Serial.print(val);
+    Serial.print(" ");
     if (sensor[i])
       activeCount++;
     error += sensor[i] * weight[i];
   }
-  // Serial.println();
+  Serial.println();
 
   if (activeCount == 0)
   {
@@ -112,22 +112,22 @@ void loop()
     choice[1] = (sensor[2] || sensor[3] || sensor[4] || sensor[5]);
   }
 
-  for (int i = 0; i < numSensors; i++)
-  {
-    Serial.print(sensor[i]);
-    Serial.print(' ');
-  }
+  // for (int i = 0; i < numSensors; i++)
+  // {
+  //   Serial.print(sensor[i]);
+  //   Serial.print(' ');
+  // }
 
-  Serial.print('|');
+  // Serial.print('|');
 
-  for (int i = 0; i < 3; i++)
-  {
-    Serial.print(choice[i]);
-    Serial.print(' ');
-  }
-  Serial.println();
+  // for (int i = 0; i < 3; i++)
+  // {
+  //   Serial.print(choice[i]);
+  //   Serial.print(' ');
+  // }
+  // Serial.println();
 
-  if (choice[0])
+  if (choice[0] && false)
   {
     unsigned long start = millis();
     while (millis() - start < 800)
@@ -147,11 +147,12 @@ void loop()
 
     // fallback
     motor1run(60);
+
     motor2run(60);
     // delay(40);
   }
 
-  else if (choice[2])
+  else if (choice[2] && false)
   {
     unsigned long start = millis();
     while (millis() - start < 800)
@@ -181,6 +182,7 @@ void loop()
   previousError = error;
 
   float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
+  correction = constrain(correction, -80, 80);
 
   int baseSpeed = 80;
   int leftSpeed = constrain(baseSpeed + correction, 0, 255);

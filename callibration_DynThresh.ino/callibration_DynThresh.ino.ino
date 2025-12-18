@@ -57,7 +57,7 @@ void calibrateSurface(const char* label, int minArr[], int maxArr[]) {
   }
 
   unsigned long start = millis();
-  while (millis() - start < 10000) { // 5 seconds sampling
+  while (millis() - start < 5000) { // 5 seconds sampling
     for (int i = 0; i < numSensors; i++) {
       float val = analogRead(sensorPins[i]);
       if (val < minArr[i]) minArr[i] = val;
@@ -78,6 +78,8 @@ void calibrateSurface(const char* label, int minArr[], int maxArr[]) {
   Serial.println("-------------------------------");
 }
 
+
+
 void setup() {
   Serial.begin(9600);
   for (int i = 0; i < numSensors; i++) {
@@ -85,8 +87,8 @@ void setup() {
   }
 
   // Step 1: White run
-  motor1run(80);
-  motor2run(80);
+  //motor1run(80);
+  //motor2run(80);
   calibrateSurface("WHITE", minWhite, maxWhite);
   clearSerialBuffer();
   // Step 2: Black run
@@ -111,12 +113,14 @@ void setup() {
 
   Serial.println("Full surface, press any key to start...");
   while (!Serial.available()) {}
-  motor1run(0);
-  motor2run(0);
+  //motor1run(0);
+  //motor2run(0);
 
 }
 
 void loop() {
+  motor1run(130);
+  motor2run(130);
   // Test loop: print binary sensor states
   for (int i = 0; i < numSensors; i++) {
     int val = analogRead(sensorPins[i]);
