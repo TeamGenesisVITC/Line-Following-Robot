@@ -1,0 +1,43 @@
+#include <Arduino.h>
+
+const int L_IN1 = 4, L_IN2 = 5;
+const int R_IN1 = 10, R_IN2 = 9;
+const int PIN_SLEEP = 6;  // set -1 if not wired
+const int PWM = 160;
+
+void motor(int in1, int in2, int spd){
+  spd = constrain(spd, -255, 255);
+  if(spd == 0){ digitalWrite(in1, LOW); digitalWrite(in2, LOW); return; }
+  int p = abs(spd);
+  if(spd > 0){ analogWrite(in1, p); digitalWrite(in2, LOW); }
+  else       { digitalWrite(in1, LOW); analogWrite(in2, p); }
+}
+
+void setup() {
+  pinMode(L_IN1, OUTPUT); pinMode(L_IN2, OUTPUT);
+  pinMode(R_IN1, OUTPUT); pinMode(R_IN2, OUTPUT);
+  analogWriteResolution(8);
+
+  if(PIN_SLEEP != -1){
+    pinMode(PIN_SLEEP, OUTPUT);
+    digitalWrite(PIN_SLEEP, HIGH); // nSLEEP high => outputs enabled [web:84]
+  }
+}
+
+void loop() {
+  motor(L_IN1, L_IN2, PWM);
+  motor(R_IN1, R_IN2, PWM);
+  delay(1500);
+
+  motor(L_IN1, L_IN2, 0);
+  motor(R_IN1, R_IN2, 0);
+  delay(500);
+
+  motor(L_IN1, L_IN2, -PWM);
+  motor(R_IN1, R_IN2, -PWM);
+  delay(1500);
+
+  motor(L_IN1, L_IN2, 0);
+  motor(R_IN1, R_IN2, 0);
+  delay(500);
+}
