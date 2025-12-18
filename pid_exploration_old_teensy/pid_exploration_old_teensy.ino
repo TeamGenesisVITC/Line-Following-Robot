@@ -1,17 +1,20 @@
 #include <Arduino.h>
 
-// DRV8833 Motor pins (2-wire control per motor)
-#define L_IN1 4   // Left motor
-#define L_IN2 5
-#define R_IN1 10  // Right motor
-#define R_IN2 9
+// TB6612FNG Motor pins
+#define L_IN1 4   // Left motor direction 1
+#define L_IN2 5   // Left motor direction 2
+#define L_PWM 3   // Left motor PWM (speed)
+#define R_IN1 10  // Right motor direction 1
+#define R_IN2 9   // Right motor direction 2
+#define R_PWM 11  // Right motor PWM (speed)
+#define STBY 6    // Standby pin (set HIGH to enable motors)
 
 // IR sensor array (8 sensors)
 const int numSensors = 8;
 int sensorPins[numSensors] = {A9, A8, A7, A6, A5, A4, A3, A2};
 
 bool isBlackLine = 0;
-float threshold[numSensors] = {1640, 1481, 1509, 1643, 1450, 1694, 2127, 1966};
+float threshold[numSensors] = {3084, 3016, 3026, 3047, 3086, 3184, 3307, 2027};
 int weight[numSensors] = {-8, -4, -2, -1, 1, 2, 4, 8};
 
 // PID constants — tune these
@@ -22,27 +25,37 @@ float Kd = 25.0;
 float integral = 0;
 float previousError = 0;
 
-// DRV8833 motor control: speed range -255 to 255
-void setMotor(int in1, int in2, int speed) {
+// Distance tracking variables
+float distanceAccumulator = 0.0;
+unsigned long lastLoopTime = 0;
+int lastMotorPWM = 0;  // Store the PWM value sent to motor1
+bool isTurning = false;  // Flag to ignore distance during turns
+
+// TB6612FNG motor control
+// speed: -255 (full reverse) to +255 (full forward)
+void setMotor(int in1, int in2, int pwm, int speed) {
   speed = constrain(speed, -255, 255);
 
   if (speed > 0) {
     // Forward
-    analogWrite(in1, speed);
-    analogWrite(in2, 0);
+    digitalWrite(in1, HIGH);
+    digitalWrite(in2, LOW);
+    analogWrite(pwm, speed);
   } else if (speed < 0) {
     // Reverse
-    analogWrite(in1, 0);
-    analogWrite(in2, -speed);
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, HIGH);
+    analogWrite(pwm, -speed);
   } else {
-    // Brake
-    analogWrite(in1, 0);
-    analogWrite(in2, 0);
+    // Brake (short brake)
+    digitalWrite(in1, LOW);
+    digitalWrite(in2, LOW);
+    analogWrite(pwm, 0);
   }
 }
 
-void motor1run(int speed) { setMotor(L_IN1, L_IN2, speed); }
-void motor2run(int speed) { setMotor(R_IN1, R_IN2, speed); }
+void motor1run(int speed) { setMotor(L_IN1, L_IN2, L_PWM, speed); }
+void motor2run(int speed) { setMotor(R_IN1, R_IN2, R_PWM, speed); }
 
 void setup() {
   Serial.begin(9600);
@@ -59,14 +72,24 @@ void setup() {
   // Setup motor pins
   pinMode(L_IN1, OUTPUT);
   pinMode(L_IN2, OUTPUT);
+  pinMode(L_PWM, OUTPUT);
   pinMode(R_IN1, OUTPUT);
   pinMode(R_IN2, OUTPUT);
+  pinMode(R_PWM, OUTPUT);
+  pinMode(STBY, OUTPUT);
+  
+  // Enable motor driver
+  digitalWrite(STBY, HIGH);
   
   // Initial brake
   motor1run(0);
   motor2run(0);
   
   delay(3000);  // Startup delay
+  Serial.println("TB6612FNG Line Follower Ready");
+  
+  // Initialize loop timer
+  lastLoopTime = millis();
 }
 
 int count = 0;
@@ -79,9 +102,17 @@ int y = 0;
 int nodes[150][2];
 int matrix[10][10];
 
-unsigned long prev = millis();
-
 void loop() {
+  // Calculate loop iteration time
+  unsigned long currentTime = millis();
+  unsigned long loopDuration = currentTime - lastLoopTime;
+  lastLoopTime = currentTime;
+
+  // Accumulate distance (PWM * time) only when not turning
+  if (!isTurning && lastMotorPWM != 0) {
+    distanceAccumulator += abs(lastMotorPWM) * loopDuration;
+  }
+
   int sensor[numSensors];
   float error = 0.0;
   int activeCount = 0;
@@ -106,6 +137,7 @@ void loop() {
 
   // Lost line - stop
   if (activeCount == 0) {
+    lastMotorPWM = 0;
     motor1run(0);
     motor2run(0);
     return;
@@ -116,9 +148,9 @@ void loop() {
 
   // --- LEFT TURN DETECTION ---
   if (leftExtreme) {
-    unsigned long now = millis();
-    dist = now - prev;
-    prev = now;
+    // Convert accumulated distance to integer
+    dist = (int)distanceAccumulator;
+    distanceAccumulator = 0.0;  // Reset accumulator
 
     // Update position based on direction
     if (dir == 0) {
@@ -180,6 +212,7 @@ void loop() {
     }
 
     // Execute hard left turn - spin until line reacquired
+    isTurning = true;  // Set turning flag
     while (true) {
       motor1run(-100);  // Left motor reverse
       motor2run(100);   // Right motor forward
@@ -196,15 +229,18 @@ void loop() {
     
     motor1run(0);
     motor2run(0);
+    isTurning = false;  // Clear turning flag
+    lastMotorPWM = 0;
     delay(20);
+    lastLoopTime = millis();  // Reset timer after turn
     return;
   }
 
   // --- RIGHT TURN DETECTION ---
   else if (rightExtreme) {
-    unsigned long now = millis();
-    dist = now - prev;
-    prev = now;
+    // Convert accumulated distance to integer
+    dist = (int)distanceAccumulator;
+    distanceAccumulator = 0.0;  // Reset accumulator
 
     // Update position based on direction
     if (dir == 0) {
@@ -263,6 +299,7 @@ void loop() {
     }
 
     // Execute hard right turn - spin until line reacquired
+    isTurning = true;  // Set turning flag
     while (true) {
       motor1run(100);   // Left motor forward
       motor2run(-100);  // Right motor reverse
@@ -279,7 +316,10 @@ void loop() {
     
     motor1run(0);
     motor2run(0);
+    isTurning = false;  // Clear turning flag
+    lastMotorPWM = 0;
     delay(20);
+    lastLoopTime = millis();  // Reset timer after turn
     return;
   }
 
@@ -292,9 +332,12 @@ void loop() {
   float correction = (Kp * error) + (Ki * integral) + (Kd * derivative);
 
   // Base speed and differential steering
-  int baseSpeed = 100;  // Adjusted for DRV8833 (was 200 for L298N)
+  int baseSpeed = 100;  // TB6612FNG optimal speed
   int leftSpeed = constrain(baseSpeed + correction, -255, 255);
   int rightSpeed = constrain(baseSpeed - correction, -255, 255);
+
+  // Store PWM value for distance calculation
+  lastMotorPWM = leftSpeed;
 
   motor1run(leftSpeed);
   motor2run(rightSpeed);
