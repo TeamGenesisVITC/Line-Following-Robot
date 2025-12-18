@@ -95,7 +95,10 @@ void setup() {
 
   for (int i = 0; i < numSensors; i++) {
     threshold[i] = (((maxWhite[i] + minBlack[i]) / 2) + minBlack[i]) / 2;
+    Serial.print(threshold[i]);
+    Serial.print(' ');
   }
+  Serial.println();
 
   Serial.println("Calibration complete.");
   Serial.println("Press any key to start...");
