@@ -1,0 +1,678 @@
+#include <Arduino.h>
+
+// ======================================================
+//                 USER CONFIG / PINS
+// ======================================================
+
+// Buttons
+static const uint8_t PIN_BTN_CALIB  = 14;   // calibration
+static const uint8_t PIN_BTN_GO     = 15;   // exploration + map + rerun
+// static const uint8_t PIN_BTN_SOLVE = 12; // final solve (not connected yet)
+
+// DRV8833 motor pins
+static const uint8_t L_IN1 = 4;
+static const uint8_t L_IN2 = 5;
+static const uint8_t R_IN1 = 10;
+static const uint8_t R_IN2 = 9;
+
+// DRV8833 SLEEP (your board shows sleep/EEP). Keep HIGH to enable. [web:82]
+static const int8_t PIN_SLEEP = 6; // set to -1 if not wired
+
+// Sensors: you confirmed S0=A2 ... S7=A9 (0->7 in sequence)
+static const uint8_t NUM_SENSORS = 8;
+static const uint8_t sensorPins[NUM_SENSORS] = {A2, A3, A4, A5, A6, A7, A8, A9}; // S0..S7
+
+// Line configuration
+static const bool LINE_IS_BLACK = true;   // true = black line on white floor
+
+// Motion tuning (start points; tune on track)
+static const int BASE_PWM_EXPLORE = 130;
+static const int BASE_PWM_RUN     = 170;
+static const int TURN_PWM         = 140;
+static const int CALIB_TURN_PWM   = 120;
+static const int MIN_START_TORQUE = 70;
+static const int MAX_PWM          = 220;
+
+// PID (from your Nano methodology; tune for your chassis)
+static float Kp = 40.0f;
+static float Ki = 0.0f;
+static float Kd = 25.0f;
+
+// Goal patch detection hold time
+static const uint16_t PATCH_CONFIRM_MS = 120;
+
+// Graph size
+static const uint8_t MAX_NODES = 60;
+
+// Equal edge-cost per node transition (no encoder)
+static const uint16_t EDGE_COST = 100;
+
+// ======================================================
+//                 INTERNALS
+// ======================================================
+
+static uint16_t threshold[NUM_SENSORS] = {900,900,900,900,900,900,900,900}; // overwritten by calibration
+static const int8_t weight[NUM_SENSORS] = {-8,-4,-2,-1, 1, 2, 4, 8};
+
+static float integral = 0;
+static float prevError = 0;
+
+// Directions: 0=E,1=S,2=W,3=N
+static uint8_t dir = 0;
+
+// Graph storage
+static int8_t   toN[MAX_NODES][4];
+static uint16_t distW[MAX_NODES][4];
+static uint8_t  edgeVisits[MAX_NODES][4];
+static uint8_t  nodeExitMask[MAX_NODES];
+
+static int16_t nodesXY[MAX_NODES][2];
+static uint8_t nodeCount = 0;
+
+static uint8_t lastNode = 0;
+static uint8_t currNode = 0;
+static int8_t  goalNode = -1;
+
+static int16_t x = 0, y = 0;
+
+// Bitmasks
+#define BIT_N 1
+#define BIT_E 2
+#define BIT_S 4
+#define BIT_W 8
+
+static inline uint8_t bitForDir(uint8_t d){
+  if(d==0) return BIT_E;
+  if(d==1) return BIT_S;
+  if(d==2) return BIT_W;
+  return BIT_N;
+}
+static inline uint8_t oppositeDir(uint8_t d){ return (d + 2) & 3; }
+
+enum Mode {
+  MODE_WAIT_CALIB,
+  MODE_WAIT_EXPLORE,
+  MODE_MAP,
+  MODE_WAIT_RERUN,
+  MODE_RUN,
+  MODE_DONE
+};
+static Mode mode = MODE_WAIT_CALIB;
+
+// Path
+static int8_t pathNodes[MAX_NODES];
+static int8_t pathLen = 0;
+
+// ======================================================
+//                 DRV8833 MOTOR DRIVER
+// Fast-decay PWM (simple speed meaning)
+// ======================================================
+static inline void motorDRV8833(uint8_t in1, uint8_t in2, int speed) {
+  speed = constrain(speed, -MAX_PWM, MAX_PWM);
+
+  if (speed == 0) {
+    // Coast (IN1=0 IN2=0)
+    digitalWriteFast(in1, LOW);
+    digitalWriteFast(in2, LOW);
+    return;
+  }
+
+  int pwm = abs(speed);
+  if (pwm < MIN_START_TORQUE) pwm = MIN_START_TORQUE;
+
+  if (speed > 0) {
+    // forward: IN1=PWM, IN2=0
+    analogWrite(in1, pwm);
+    digitalWriteFast(in2, LOW);
+  } else {
+    // reverse: IN1=0, IN2=PWM
+    digitalWriteFast(in1, LOW);
+    analogWrite(in2, pwm);
+  }
+}
+
+static inline void drive(int left, int right) {
+  motorDRV8833(L_IN1, L_IN2, left);
+  motorDRV8833(R_IN1, R_IN2, right);
+}
+
+static inline void stopMotors(bool brake=false) {
+  if (!brake) {
+    digitalWriteFast(L_IN1, LOW);  digitalWriteFast(L_IN2, LOW);
+    digitalWriteFast(R_IN1, LOW);  digitalWriteFast(R_IN2, LOW);
+  } else {
+    // Brake (IN1=1 IN2=1)
+    digitalWriteFast(L_IN1, HIGH); digitalWriteFast(L_IN2, HIGH);
+    digitalWriteFast(R_IN1, HIGH); digitalWriteFast(R_IN2, HIGH);
+  }
+}
+
+// ======================================================
+//                 SENSOR HELPERS
+// ======================================================
+static inline void readSensorBinary(int s[NUM_SENSORS]){
+  for (uint8_t i = 0; i < NUM_SENSORS; i++) {
+    uint16_t v = analogRead(sensorPins[i]);
+    bool onLine = LINE_IS_BLACK ? (v >= threshold[i]) : (v < threshold[i]);
+    s[i] = onLine ? 1 : 0;
+  }
+}
+
+static inline int sumSensors(const int s[NUM_SENSORS]){
+  int sum = 0; for(uint8_t i=0;i<NUM_SENSORS;i++) sum += s[i]; return sum;
+}
+static inline bool centerOnLine(const int s[NUM_SENSORS]){
+  return (s[3] || s[4]);
+}
+static inline bool allBlack(const int s[NUM_SENSORS]){
+  return sumSensors(s) == (int)NUM_SENSORS;
+}
+static inline bool allWhite(const int s[NUM_SENSORS]){
+  return sumSensors(s) == 0;
+}
+
+static bool detectGoalPatch(){
+  static uint32_t patchStart = 0;
+  int s[NUM_SENSORS]; readSensorBinary(s);
+  bool isPatch = allBlack(s) || allWhite(s);
+  if(isPatch){
+    if(patchStart == 0) patchStart = millis();
+    if(millis() - patchStart >= PATCH_CONFIRM_MS) return true;
+  } else {
+    patchStart = 0;
+  }
+  return false;
+}
+
+// Junction-ish detection (same style as your old code; tune as needed)
+static inline bool leftExtreme(const int s[NUM_SENSORS])  { return (s[0] && !s[1] && !s[2]); }
+static inline bool rightExtreme(const int s[NUM_SENSORS]) { return (s[7] && !s[6] && !s[5]); }
+static inline bool isJunctionLike(const int s[NUM_SENSORS]){
+  return leftExtreme(s) || rightExtreme(s);
+}
+
+static uint8_t computeTurnMask(const int sensor[NUM_SENSORS]) {
+  uint8_t mask = 0;
+
+  // forward available
+  if (sensor[3] || sensor[4]) mask |= bitForDir(dir);
+
+  // left available
+  if (sensor[0]) mask |= bitForDir((dir + 3) & 3);
+
+  // right available
+  if (sensor[7]) mask |= bitForDir((dir + 1) & 3);
+
+  return mask;
+}
+
+// ======================================================
+//                 CALIBRATION
+// ======================================================
+static void runCalibration() {
+  uint16_t minV[NUM_SENSORS], maxV[NUM_SENSORS];
+  for(uint8_t i=0;i<NUM_SENSORS;i++){ minV[i]=1023; maxV[i]=0; }
+
+  uint32_t start = millis();
+  while(millis() - start < 3000){
+    uint32_t t = millis() - start;
+    if (t < 1000)      drive(-CALIB_TURN_PWM,  CALIB_TURN_PWM);
+    else if (t < 2000) drive( CALIB_TURN_PWM, -CALIB_TURN_PWM);
+    else               drive(-CALIB_TURN_PWM,  CALIB_TURN_PWM);
+
+    for(uint8_t i=0;i<NUM_SENSORS;i++){
+      uint16_t v = analogRead(sensorPins[i]);
+      if(v < minV[i]) minV[i]=v;
+      if(v > maxV[i]) maxV[i]=v;
+    }
+  }
+  stopMotors(true);
+  delay(30);
+
+  for(uint8_t i=0;i<NUM_SENSORS;i++){
+    threshold[i] = (minV[i] + maxV[i]) / 2;
+  }
+
+  Serial.println("Thresholds:");
+  for(uint8_t i=0;i<NUM_SENSORS;i++){
+    Serial.print(threshold[i]);
+    if(i < NUM_SENSORS-1) Serial.print(", ");
+  }
+  Serial.println();
+}
+
+// ======================================================
+//                 PID LINE FOLLOW
+// ======================================================
+static void lineFollowStep(int basePwm){
+  int s[NUM_SENSORS];
+  readSensorBinary(s);
+
+  float error = 0;
+  int active = 0;
+  for(uint8_t i=0;i<NUM_SENSORS;i++){
+    if(s[i]){
+      active++;
+      error += weight[i];
+    }
+  }
+  if(active == 0){
+    stopMotors(false);
+    return;
+  }
+
+  integral += error;
+  integral = constrain(integral, -50.0f, 50.0f);
+  float deriv = error - prevError;
+  prevError = error;
+
+  float corr = Kp*error + Ki*integral + Kd*deriv;
+
+  int left  = constrain((int)(basePwm + corr), -MAX_PWM, MAX_PWM);
+  int right = constrain((int)(basePwm - corr), -MAX_PWM, MAX_PWM);
+
+  // forward only
+  left  = max(0, left);
+  right = max(0, right);
+
+  drive(left, right);
+}
+
+// ======================================================
+//                 TURNING PRIMITIVES
+// ======================================================
+static void turnLeftUntilCenter(){
+  while(true){
+    drive(-TURN_PWM, TURN_PWM);
+    int s[NUM_SENSORS]; readSensorBinary(s);
+    if(centerOnLine(s)) break;
+  }
+  stopMotors(true); delay(20);
+  dir = (dir + 3) & 3;
+}
+
+static void turnRightUntilCenter(){
+  while(true){
+    drive(TURN_PWM, -TURN_PWM);
+    int s[NUM_SENSORS]; readSensorBinary(s);
+    if(centerOnLine(s)) break;
+  }
+  stopMotors(true); delay(20);
+  dir = (dir + 1) & 3;
+}
+
+static void uTurnUntilCenter(){
+  turnLeftUntilCenter();
+  delay(40);
+  turnLeftUntilCenter();
+}
+
+static void faceDir(uint8_t target){
+  uint8_t diff = (target - dir + 4) & 3;
+  if(diff == 0) return;
+  if(diff == 1) turnRightUntilCenter();
+  else if(diff == 3) turnLeftUntilCenter();
+  else uTurnUntilCenter();
+}
+
+// ======================================================
+//                 GRAPH / MAPPING
+// ======================================================
+static void initGraph(){
+  for(uint8_t i=0;i<MAX_NODES;i++){
+    for(uint8_t d=0;d<4;d++){
+      toN[i][d] = -1;
+      distW[i][d] = 0;
+      edgeVisits[i][d] = 0;
+    }
+    nodeExitMask[i] = 0;
+    nodesXY[i][0] = nodesXY[i][1] = 0;
+  }
+
+  nodeCount = 1;
+  currNode = lastNode = 0;
+  goalNode = -1;
+  dir = 0;
+  x = 0; y = 0;
+}
+
+static int8_t findExistingNode(int16_t xx, int16_t yy){
+  const int16_t tol = 40;
+  for(uint8_t i=0;i<nodeCount;i++){
+    if(abs(nodesXY[i][0]-xx) <= tol && abs(nodesXY[i][1]-yy) <= tol) return (int8_t)i;
+  }
+  return -1;
+}
+
+static int8_t getOrCreateNodeAtXY(){
+  int8_t ex = findExistingNode(x, y);
+  if(ex >= 0) return ex;
+  if(nodeCount >= MAX_NODES) return -1;
+  uint8_t id = nodeCount++;
+  nodesXY[id][0] = x;
+  nodesXY[id][1] = y;
+  return (int8_t)id;
+}
+
+static int8_t chooseNextDir(uint8_t node){
+  // Left, Straight, Right, Back
+  const uint8_t relOrder[4] = {3,0,1,2};
+
+  for(uint8_t pass=0; pass<2; pass++){
+    for(uint8_t i=0;i<4;i++){
+      uint8_t absD = (dir + relOrder[i]) & 3;
+      if(!(nodeExitMask[node] & bitForDir(absD))) continue;
+      if(edgeVisits[node][absD] == pass) return (int8_t)absD;
+    }
+  }
+  return (int8_t)oppositeDir(dir);
+}
+
+static void arriveAtNodeAndUpdateGraph(uint8_t nodeMaskHere){
+  uint16_t dist = EDGE_COST;
+
+  if (dir==0) y += dist;
+  else if(dir==1) x += dist;
+  else if(dir==2) y -= dist;
+  else x -= dist;
+
+  int8_t newNode = getOrCreateNodeAtXY();
+  if(newNode < 0){
+    mode = MODE_DONE;
+    return;
+  }
+  currNode = (uint8_t)newNode;
+
+  nodeExitMask[currNode] |= nodeMaskHere;
+
+  if(lastNode != currNode){
+    toN[lastNode][dir] = currNode;
+    distW[lastNode][dir] = dist;
+
+    uint8_t back = oppositeDir(dir);
+    toN[currNode][back] = lastNode;
+    distW[currNode][back] = dist;
+
+    edgeVisits[lastNode][dir] = min<uint8_t>(2, edgeVisits[lastNode][dir] + 1);
+    edgeVisits[currNode][back] = min<uint8_t>(2, edgeVisits[currNode][back] + 1);
+
+    lastNode = currNode;
+  }
+}
+
+// ======================================================
+//                 BIDIRECTIONAL SHORTEST PATH (h=0)
+// ======================================================
+static const uint16_t INF = 65535;
+
+struct OpenItem { int8_t n; uint16_t f; };
+
+static int8_t popMin(OpenItem open[], int8_t &cnt){
+  int8_t best=0;
+  for(int8_t i=1;i<cnt;i++) if(open[i].f < open[best].f) best=i;
+  int8_t n=open[best].n;
+  open[best]=open[--cnt];
+  return n;
+}
+static bool inOpen(OpenItem open[], int8_t cnt, int8_t node, int8_t &idx){
+  for(int8_t i=0;i<cnt;i++) if(open[i].n==node){ idx=i; return true; }
+  idx=-1; return false;
+}
+
+static bool bidirShortest(int8_t source, int8_t dest, int8_t outPath[], int8_t &outLen){
+  static uint16_t gF[MAX_NODES], gB[MAX_NODES];
+  static int8_t pF[MAX_NODES], pB[MAX_NODES];
+  static bool cF[MAX_NODES], cB[MAX_NODES];
+
+  for(uint8_t i=0;i<nodeCount;i++){
+    gF[i]=gB[i]=INF;
+    pF[i]=pB[i]=-1;
+    cF[i]=cB[i]=false;
+  }
+
+  OpenItem oF[MAX_NODES], oB[MAX_NODES];
+  int8_t nF=0, nB=0;
+
+  gF[source]=0; oF[nF++]={source, 0};
+  gB[dest]=0;   oB[nB++]={dest, 0};
+
+  int8_t bestMeet=-1;
+  uint16_t bestCost=INF;
+
+  while(nF>0 && nB>0){
+    uint16_t minF = oF[0].f; for(int8_t i=1;i<nF;i++) if(oF[i].f<minF) minF=oF[i].f;
+    uint16_t minB = oB[0].f; for(int8_t i=1;i<nB;i++) if(oB[i].f<minB) minB=oB[i].f;
+    bool expandF = (minF <= minB);
+
+    if(expandF){
+      int8_t u = popMin(oF, nF);
+      if(cF[u]) continue;
+      cF[u]=true;
+
+      if(cB[u]){
+        uint16_t total = gF[u] + gB[u];
+        if(total < bestCost){ bestCost=total; bestMeet=u; }
+      }
+
+      for(uint8_t d=0; d<4; d++){
+        int8_t v = toN[u][d];
+        if(v < 0) continue;
+        if(cF[v]) continue;
+        uint16_t ng = gF[u] + distW[u][d];
+        if(ng < gF[v]){
+          gF[v]=ng; pF[v]=u;
+          uint16_t nf=ng;
+          int8_t idx; if(!inOpen(oF,nF,v,idx)) oF[nF++]={v,nf}; else oF[idx].f=nf;
+        }
+      }
+    } else {
+      int8_t u = popMin(oB, nB);
+      if(cB[u]) continue;
+      cB[u]=true;
+
+      if(cF[u]){
+        uint16_t total = gF[u] + gB[u];
+        if(total < bestCost){ bestCost=total; bestMeet=u; }
+      }
+
+      for(uint8_t d=0; d<4; d++){
+        int8_t v = toN[u][d];
+        if(v < 0) continue;
+        if(cB[v]) continue;
+        uint16_t ng = gB[u] + distW[u][d];
+        if(ng < gB[v]){
+          gB[v]=ng; pB[v]=u;
+          uint16_t nf=ng;
+          int8_t idx; if(!inOpen(oB,nB,v,idx)) oB[nB++]={v,nf}; else oB[idx].f=nf;
+        }
+      }
+    }
+  }
+
+  if(bestMeet < 0){ outLen=0; return false; }
+
+  int8_t tmp[MAX_NODES]; int8_t tlen=0;
+  int8_t cur = bestMeet;
+  while(cur != -1){ tmp[tlen++] = cur; cur = pF[cur]; }
+
+  outLen = 0;
+  for(int8_t i=tlen-1; i>=0; i--) outPath[outLen++] = tmp[i];
+
+  cur = pB[bestMeet];
+  while(cur != -1){ outPath[outLen++] = cur; cur = pB[cur]; }
+
+  return true;
+}
+
+static int8_t dirToNeighbor(int8_t u, int8_t v){
+  for(int8_t d=0; d<4; d++) if(toN[u][d] == v) return d;
+  return -1;
+}
+
+// ======================================================
+//                 MAP / RUN TICKS
+// ======================================================
+static void mappingTick(){
+  if(detectGoalPatch() && goalNode < 0){
+    goalNode = (int8_t)currNode;
+    stopMotors(true);
+    mode = MODE_WAIT_RERUN;
+    return;
+  }
+
+  int s[NUM_SENSORS];
+  readSensorBinary(s);
+
+  if(!isJunctionLike(s)){
+    lineFollowStep(BASE_PWM_EXPLORE);
+    return;
+  }
+
+  stopMotors(true);
+  delay(20);
+
+  uint8_t mask = computeTurnMask(s);
+  nodeExitMask[currNode] |= mask;
+
+  arriveAtNodeAndUpdateGraph(mask);
+  if(mode != MODE_MAP) return;
+
+  int8_t nextDir = chooseNextDir(currNode);
+  faceDir((uint8_t)nextDir);
+
+  drive(BASE_PWM_EXPLORE, BASE_PWM_EXPLORE);
+  delay(60);
+}
+
+static void runPathTick(){
+  static int8_t idx = 0;
+
+  if(idx >= pathLen - 1){
+    stopMotors(true);
+    mode = MODE_DONE;
+    idx = 0;
+    return;
+  }
+
+  int8_t u = pathNodes[idx];
+  int8_t v = pathNodes[idx+1];
+  int8_t nd = dirToNeighbor(u, v);
+  if(nd < 0){ mode = MODE_DONE; idx = 0; return; }
+
+  faceDir((uint8_t)nd);
+
+  while(true){
+    if(detectGoalPatch()){
+      stopMotors(true);
+      mode = MODE_DONE;
+      idx = 0;
+      return;
+    }
+    int s[NUM_SENSORS]; readSensorBinary(s);
+    if(isJunctionLike(s)){
+      stopMotors(true);
+      delay(20);
+      currNode = (uint8_t)v;
+      idx++;
+      break;
+    }
+    lineFollowStep(BASE_PWM_RUN);
+  }
+}
+
+// ======================================================
+//                 SETUP / LOOP
+// ======================================================
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_BTN_CALIB, INPUT_PULLUP);
+  pinMode(PIN_BTN_GO,    INPUT_PULLUP);
+  // pinMode(PIN_BTN_SOLVE, INPUT_PULLUP);
+
+  pinMode(L_IN1, OUTPUT); pinMode(L_IN2, OUTPUT);
+  pinMode(R_IN1, OUTPUT); pinMode(R_IN2, OUTPUT);
+
+  if(PIN_SLEEP != -1){
+    pinMode(PIN_SLEEP, OUTPUT);
+    digitalWrite(PIN_SLEEP, HIGH);   // nSLEEP high => active [web:82]
+  }
+
+  // Teensy analog defaults to 10-bit; keep it explicit. [web:43]
+  analogReadResolution(10);
+  analogWriteResolution(8);
+
+  for(uint8_t i=0;i<NUM_SENSORS;i++) pinMode(sensorPins[i], INPUT);
+
+  initGraph();
+  stopMotors(false);
+
+  Serial.println("READY: Btn14=Calibrate, Btn15=Explore, Btn15 again=Speed-run after goal.");
+}
+
+void loop() {
+  if(PIN_SLEEP != -1) digitalWrite(PIN_SLEEP, HIGH);
+
+  switch(mode){
+    case MODE_WAIT_CALIB:
+      stopMotors(false);
+      if(digitalRead(PIN_BTN_CALIB) == LOW){
+        delay(200);
+        Serial.println("Calibrating...");
+        runCalibration();
+        Serial.println("Calibration done. Press Btn15 to explore.");
+        mode = MODE_WAIT_EXPLORE;
+      }
+      break;
+
+    case MODE_WAIT_EXPLORE:
+      stopMotors(false);
+      if(digitalRead(PIN_BTN_GO) == LOW){
+        delay(200);
+        integral = 0; prevError = 0;
+        currNode = lastNode = 0;
+        dir = 0; x = 0; y = 0;
+        goalNode = -1;
+        Serial.println("Exploration started...");
+        mode = MODE_MAP;
+      }
+      break;
+
+    case MODE_MAP:
+      mappingTick();
+      break;
+
+    case MODE_WAIT_RERUN:
+      stopMotors(false);
+      if(goalNode >= 0){
+        bool ok = bidirShortest(0, goalNode, pathNodes, pathLen);
+        if(ok){
+          Serial.print("Goal node: "); Serial.println(goalNode);
+          Serial.print("Path length: "); Serial.println(pathLen);
+          Serial.println("Place robot at START. Press Btn15 to speed-run.");
+        } else {
+          Serial.println("No path found. Increase MAX_NODES or tune junction detection.");
+          mode = MODE_DONE;
+          break;
+        }
+      }
+      if(digitalRead(PIN_BTN_GO) == LOW){
+        delay(200);
+        currNode = lastNode = 0;
+        dir = 0;
+        integral = 0; prevError = 0;
+        Serial.println("Speed-run started...");
+        mode = MODE_RUN;
+      }
+      break;
+
+    case MODE_RUN:
+      runPathTick();
+      break;
+
+    case MODE_DONE:
+    default:
+      stopMotors(false);
+      break;
+  }
+}

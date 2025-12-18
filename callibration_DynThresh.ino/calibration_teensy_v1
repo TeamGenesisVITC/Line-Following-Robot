@@ -1,0 +1,138 @@
+#include <Arduino.h>
+
+// ---------------- Motor pins (same numbers, but must match Teensy wiring) ----------------
+static const uint8_t AIN1 = 4;
+static const uint8_t AIN2 = 3;
+static const uint8_t BIN1 = 6;
+static const uint8_t BIN2 = 7;
+static const uint8_t PWMA = 9;   // PWM
+static const uint8_t PWMB = 10;  // PWM
+
+// ---------------- Sensors ----------------
+static const uint8_t numSensors = 8;
+static const uint8_t sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
+
+// Keep Teensy reading like Arduino Nano (0..1023)
+static const uint8_t  ADC_BITS = 10;
+static const uint16_t ADC_MAX  = (1u << ADC_BITS) - 1u;
+
+// Calibration storage
+uint16_t minWhite[numSensors], maxWhite[numSensors];
+uint16_t minBlack[numSensors], maxBlack[numSensors];
+uint16_t threshold[numSensors];
+
+// ---------------- Motor helper ----------------
+static inline void setMotor(uint8_t pin1, uint8_t pin2, uint8_t pwmPin, int speed) {
+  speed = constrain(speed, 0, 255);   // forward only (0=brake/stop)
+  if (speed > 0) {
+    digitalWrite(pin1, HIGH);
+    digitalWrite(pin2, LOW);
+    analogWrite(pwmPin, speed);       // 0..255 (8-bit)
+  } else {
+    // "Brake" mode (depends on your H-bridge)
+    digitalWrite(pin1, HIGH);
+    digitalWrite(pin2, HIGH);
+    analogWrite(pwmPin, 0);
+  }
+}
+
+static inline void motor1run(int speed) { setMotor(AIN1, AIN2, PWMA, speed); }
+static inline void motor2run(int speed) { setMotor(BIN1, BIN2, PWMB, speed); }
+
+// ---------------- Serial helpers ----------------
+static void clearSerialBuffer() {
+  while (Serial.available()) Serial.read();
+}
+
+static void waitAnyKey() {
+  while (!Serial.available()) { /* wait */ }
+  clearSerialBuffer();
+}
+
+// ---------------- Calibration ----------------
+static void calibrateSurface(const char* label,
+                             uint16_t minArr[], uint16_t maxArr[],
+                             uint32_t sampleMs,
+                             int motorSpeedDuringSample) {
+  Serial.print("Place robot on ");
+  Serial.print(label);
+  Serial.println(" surface, press any key to start...");
+  waitAnyKey();
+
+  for (uint8_t i = 0; i < numSensors; i++) {
+    minArr[i] = ADC_MAX;
+    maxArr[i] = 0;
+  }
+
+  motor1run(motorSpeedDuringSample);
+  motor2run(motorSpeedDuringSample);
+
+  uint32_t start = millis();
+  while (millis() - start < sampleMs) {
+    for (uint8_t i = 0; i < numSensors; i++) {
+      uint16_t v = analogRead(sensorPins[i]);
+      if (v < minArr[i]) minArr[i] = v;
+      if (v > maxArr[i]) maxArr[i] = v;
+    }
+  }
+
+  motor1run(0);
+  motor2run(0);
+
+  Serial.print(label);
+  Serial.println(" run complete.");
+  for (uint8_t i = 0; i < numSensors; i++) {
+    Serial.print("Sensor ");
+    Serial.print(i);
+    Serial.print(": min=");
+    Serial.print(minArr[i]);
+    Serial.print(" max=");
+    Serial.println(maxArr[i]);
+  }
+  Serial.println("-------------------------------");
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Teensy: make the assumptions explicit
+  analogReadResolution(ADC_BITS);     // keep 0..1023 behavior
+  analogWriteResolution(8);           // keep 0..255 PWM behavior
+
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+  pinMode(PWMA, OUTPUT); pinMode(PWMB, OUTPUT);
+
+  // Analog pins don't strictly need pinMode(INPUT), but it's harmless.
+  for (uint8_t i = 0; i < numSensors; i++) pinMode(sensorPins[i], INPUT);
+
+  // Calibrate: sample 10 seconds each, moving slowly while sampling (change speed to 0 if you prefer stationary)
+  calibrateSurface("WHITE", minWhite, maxWhite, 10000, 80);
+  calibrateSurface("BLACK", minBlack, maxBlack, 10000, 80);
+
+  // Threshold: simple midpoint between WHITE high and BLACK low
+  for (uint8_t i = 0; i < numSensors; i++) {
+    threshold[i] = (uint16_t)((maxWhite[i] + minBlack[i]) / 2);
+  }
+
+  Serial.println("Final Thresholds:");
+  for (uint8_t i = 0; i < numSensors; i++) {
+    Serial.print(threshold[i]);
+    if (i < numSensors - 1) Serial.print(", ");
+  }
+  Serial.println();
+  Serial.println("Calibration complete.");
+  Serial.println("Full surface, press any key to start...");
+  waitAnyKey();
+}
+
+void loop() {
+  // Print binary sensor states
+  for (uint8_t i = 0; i < numSensors; i++) {
+    uint16_t v = analogRead(sensorPins[i]);
+    Serial.print((v <= threshold[i]) ? "1" : "0");
+    Serial.print(' ');
+  }
+  Serial.println();
+  delay(200);
+}
