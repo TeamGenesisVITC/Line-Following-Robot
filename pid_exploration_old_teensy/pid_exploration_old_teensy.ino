@@ -8,7 +8,7 @@
 
 // IR sensor array (8 sensors)
 const int numSensors = 8;
-int sensorPins[numSensors] = {A7, A6, A5, A4, A3, A2, A1, A0};
+int sensorPins[numSensors] = {A9, A8, A7, A6, A5, A4, A3, A2};
 
 bool isBlackLine = 0;
 float threshold[numSensors] = {1640, 1481, 1509, 1643, 1450, 1694, 2127, 1966};
