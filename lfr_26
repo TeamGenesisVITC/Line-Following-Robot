@@ -27,7 +27,6 @@ const int TURN_SPEED = 90;
 const float Kp = 0.50;
 const float Kd = 0.80;
 
-// Keep the steering setting that worked on your robot
 const int STEER_DIRECTION = -1;
 
 const int LEFT_DIRECTION = 1;
@@ -36,10 +35,19 @@ const int RIGHT_DIRECTION = 1;
 const unsigned long CAL_TIME = 5000;
 const unsigned long TURN_TIMEOUT = 1200;
 
+// Maze settings
+const byte MAX_NODES = 100;
+const unsigned long NODE_DELAY = 100;
+const unsigned long UTURN_TIMEOUT = 1500;
+
+char nodeData[MAX_NODES];
+byte nodeCount = 0;
+
 int sensorMin[8], sensorMax[8], threshold[8];
 
 bool calibrated = false;
 bool running = false;
+bool nodeLock = false;
 
 int lastError = 0;
 int lastSide = 0;
@@ -48,6 +56,7 @@ int turnSide = 0;
 unsigned long lastSeen = 0;
 unsigned long lastStep = 0;
 unsigned long turnStarted = 0;
+unsigned long nodeStarted = 0;
 
 void motor(byte pwm, byte dir, int speed) {
   speed = constrain(speed, -255, 255);
@@ -71,9 +80,8 @@ int readSensor(byte i) {
 
   int total = 0;
 
-  for (byte n = 0; n < 4; n++) {
+  for (byte n = 0; n < 4; n++)
     total += analogRead(sensors[i]);
-  }
 
   return total / 4;
 }
@@ -135,24 +143,25 @@ void calibrate() {
   drive(0, 0);
 
   for (byte i = 0; i < 8; i++) {
-    threshold[i] = (sensorMin[i] + sensorMax[i]) / 2;
+    threshold[i] =
+      (sensorMin[i] + sensorMax[i]) / 2;
 
-    if (sensorMax[i] - sensorMin[i] >= 20) {
+    if (sensorMax[i] - sensorMin[i] >= 20)
       calibrated = true;
-    }
   }
 
   resetTracking();
+
   digitalWrite(LED_BUILTIN, LOW);
 }
 
-// -1 = towards A0; +1 = towards A7
+// -1 = left
+// +1 = right
 void pivot(int side) {
-  if (side * STEER_DIRECTION < 0) {
+  if (side * STEER_DIRECTION < 0)
     drive(-TURN_SPEED, TURN_SPEED);
-  } else {
+  else
     drive(TURN_SPEED, -TURN_SPEED);
-  }
 }
 
 void startTurn(int side) {
@@ -161,12 +170,109 @@ void startTurn(int side) {
   pivot(side);
 }
 
+void saveNode(char direction) {
+  if (nodeCount < MAX_NODES) {
+    nodeData[nodeCount] = direction;
+    nodeCount++;
+  }
+}
+
+void printNodes() {
+  Serial.println();
+  Serial.println("===== MAZE DATA =====");
+
+  for (byte i = 0; i < nodeCount; i++) {
+    Serial.print("Node ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.println(nodeData[i]);
+  }
+
+  Serial.print("Path: ");
+
+  for (byte i = 0; i < nodeCount; i++)
+    Serial.print(nodeData[i]);
+
+  Serial.println();
+  Serial.println("=====================");
+}
+
+bool leftAvailable(bool white[]) {
+  return white[0] || white[1] || white[2];
+}
+
+bool straightAvailable(bool white[]) {
+  return white[3] || white[4];
+}
+
+bool rightAvailable(bool white[]) {
+  return white[5] || white[6] || white[7];
+}
+
+void executeNode(bool white[]) {
+
+  bool left = leftAvailable(white);
+  bool straight = straightAvailable(white);
+  bool right = rightAvailable(white);
+
+  char decision;
+
+  // LEFT HAND RULE
+  if (left) {
+    decision = 'L';
+  }
+  else if (straight) {
+    decision = 'S';
+  }
+  else if (right) {
+    decision = 'R';
+  }
+  else {
+    decision = 'U';
+  }
+
+  saveNode(decision);
+
+  Serial.print("Node ");
+  Serial.print(nodeCount);
+  Serial.print(" -> ");
+  Serial.println(decision);
+
+  nodeStarted = millis();
+
+  if (decision == 'L') {
+    startTurn(-1);
+  }
+
+  else if (decision == 'R') {
+    startTurn(1);
+  }
+
+  else if (decision == 'U') {
+
+    turnSide = 1;
+    turnStarted = millis();
+
+    drive(TURN_SPEED, -TURN_SPEED);
+  }
+
+  else {
+    // Straight
+    drive(BASE_SPEED, BASE_SPEED);
+  }
+
+  nodeLock = true;
+}
+
 void followLine() {
+
   bool white[8] = {false};
+
   int sum = 0;
   byte count = 0;
 
   for (byte i = 0; i < 8; i++) {
+
     int value = readSensor(i);
 
     white[i] =
@@ -181,124 +287,237 @@ void followLine() {
 
   int error = count ? sum / count : 0;
 
-  bool centered =
-    white[3] && white[4] &&
-    !white[0] && !white[7] &&
-    abs(error) <= 50;
+  // -------------------------
+  // NODE LOCK
+  // -------------------------
 
-  // Continue a sharp turn until sensors detect the center
-  if (turnSide != 0) {
-    if (centered && millis() - turnStarted >= 40) {
+  if (nodeLock) {
+
+    bool center =
+      white[3] || white[4];
+
+    if (center &&
+        millis() - nodeStarted > NODE_DELAY) {
+
+      nodeLock = false;
       turnSide = 0;
+
+      lastError = error;
+      lastSeen = millis();
+
+      drive(BASE_SPEED, BASE_SPEED);
+    }
+
+    // U-turn timeout
+    if (millis() - turnStarted > UTURN_TIMEOUT &&
+        turnSide != 0) {
+
+      turnSide = 0;
+      nodeLock = false;
+    }
+
+    return;
+  }
+
+  // -------------------------
+  // SHARP TURN ALREADY STARTED
+  // -------------------------
+
+  if (turnSide != 0) {
+
+    bool centered =
+      white[3] && white[4];
+
+    if (centered &&
+        millis() - turnStarted >= 40) {
+
+      turnSide = 0;
+
       lastError = error;
       lastSide = 0;
       lastSeen = millis();
-    } else if (millis() - turnStarted >= TURN_TIMEOUT) {
-      // Stop if the line cannot be reacquired
+    }
+
+    else if (millis() - turnStarted >= TURN_TIMEOUT) {
+
       drive(0, 0);
+
       turnSide = 0;
       running = false;
+
       digitalWrite(LED_BUILTIN, LOW);
+
       return;
-    } else {
+    }
+
+    else {
+
       pivot(turnSide);
+
       return;
     }
   }
 
-  // Lost line: search towards its last detected side
+  // -------------------------
+  // DEAD END
+  // -------------------------
+
   if (count == 0) {
-    if (lastSide != 0 && millis() - lastSeen < 600) {
-      startTurn(lastSide);
-    } else {
+
+    if (lastSide != 0 &&
+        millis() - lastSeen < 600) {
+
+      // Treat lost line as possible dead end
+      saveNode('U');
+
+      Serial.print("Node ");
+      Serial.print(nodeCount);
+      Serial.println(" -> U");
+
+      turnSide = 1;
+      turnStarted = millis();
+
+      drive(TURN_SPEED, -TURN_SPEED);
+
+      nodeLock = true;
+    }
+
+    else {
+
       drive(0, 0);
+
       lastError = 0;
     }
 
     return;
   }
 
-  if (error < -25) {
+  // -------------------------
+  // DETECT NODE
+  // -------------------------
+
+  bool left =
+    white[0] || white[1] || white[2];
+
+  bool center =
+    white[3] || white[4];
+
+  bool right =
+    white[5] || white[6] || white[7];
+
+  bool intersection =
+    (left && center) ||
+    (center && right) ||
+    (left && right);
+
+  if (intersection) {
+
+    executeNode(white);
+
+    return;
+  }
+
+  // -------------------------
+  // NORMAL LINE FOLLOWING
+  // -------------------------
+
+  if (error < -25)
     lastSide = -1;
-  } else if (error > 25) {
+
+  else if (error > 25)
     lastSide = 1;
-  }
 
-  // Sharp LEFT turn
-  if (white[0] && !white[6] && !white[7] && error < 0) {
-    startTurn(-1);
-    return;
-  }
-
-  // Sharp RIGHT turn
-  if (white[7] && !white[0] && !white[1] && error > 0) {
-    startTurn(1);
-    return;
-  }
-
-  // Normal line following and gentle bends
   int derivative = 0;
 
-  if (millis() - lastSeen < 30) {
+  if (millis() - lastSeen < 30)
     derivative = error - lastError;
-  }
 
   lastSeen = millis();
   lastError = error;
 
   int correction =
-    (Kp * error + Kd * derivative) * STEER_DIRECTION;
+    (Kp * error + Kd * derivative)
+    * STEER_DIRECTION;
 
-  correction = constrain(
-    correction, -BASE_SPEED, BASE_SPEED
-  );
+  correction =
+    constrain(correction,
+              -BASE_SPEED,
+              BASE_SPEED);
 
-  int leftSpeed = constrain(
-    BASE_SPEED + correction, 0, MAX_SPEED
-  );
+  int leftSpeed =
+    constrain(
+      BASE_SPEED + correction,
+      0,
+      MAX_SPEED
+    );
 
-  int rightSpeed = constrain(
-    BASE_SPEED - correction, 0, MAX_SPEED
-  );
+  int rightSpeed =
+    constrain(
+      BASE_SPEED - correction,
+      0,
+      MAX_SPEED
+    );
 
   drive(leftSpeed, rightSpeed);
 }
 
 void setup() {
+
+  Serial.begin(9600);
+
   pinMode(LEFT_PWM, OUTPUT);
   pinMode(LEFT_DIR, OUTPUT);
+
   pinMode(RIGHT_PWM, OUTPUT);
   pinMode(RIGHT_DIR, OUTPUT);
 
   pinMode(CAL_BUTTON, INPUT_PULLUP);
   pinMode(RUN_BUTTON, INPUT_PULLUP);
+
   pinMode(LED_BUILTIN, OUTPUT);
 
   drive(0, 0);
 }
 
 void loop() {
-  bool cal = buttonPressed(CAL_BUTTON, 0);
-  bool run = buttonPressed(RUN_BUTTON, 1);
+
+  bool cal =
+    buttonPressed(CAL_BUTTON, 0);
+
+  bool run =
+    buttonPressed(RUN_BUTTON, 1);
 
   if (cal) {
+
     calibrate();
+
     return;
   }
 
   if (run && calibrated) {
+
     running = !running;
+
     resetTracking();
 
-    digitalWrite(LED_BUILTIN, running ? HIGH : LOW);
+    digitalWrite(
+      LED_BUILTIN,
+      running ? HIGH : LOW
+    );
 
     if (!running) {
+
       drive(0, 0);
+
+      printNodes();
     }
   }
 
-  if (running && millis() - lastStep >= 10) {
+  if (running &&
+      millis() - lastStep >= 10) {
+
     lastStep = millis();
+
     followLine();
   }
 }
